@@ -10,7 +10,7 @@ const fs = require("fs")
 const chat = require("./chatGPT")
 
 const { OpenAI } = require("openai");
-const { delay } = require('@whiskeysockets/baileys')
+const { delay, promiseTimeout } = require('@whiskeysockets/baileys')
 
 // Variables para almacenar los datos del análisis PESTEL
 let descripcionProyecto;
@@ -20,32 +20,42 @@ let caracteristicasProducto;
 let alcanceProyecto;
 let alianzasClave;
 
-let history1 = [];
-let answer = ""
-const pestelFlow = addKeyword(['PESTEL']).addAnswer( "Procesando información, por favor espera...",
-    { delay: 200}, 
-    async (ctx, { flowDynamic, state, fallBack, gotoFlow }) => {
-      const userInput = "";
-     if (history1.length < 0) {
+let history1 = []; // Historial de mensajes para el primer modelo
+const pestelFlow = addKeyword(['PESTEL'])
+  .addAnswer(
+    "Procesando información, por favor espera…",
+    {},
+    async (ctx, { flowDynamic, state, gotoFlow }) => {
+      // 1) userInput debe ser mutable, no const
+      console.log("Iniciando flujo PESTEL con datos:")
+
+      let userInput = "";
+      
+      // 2) Obtener el historial (history1) desde el estado en lugar de referenciarlo como variable global
+
+      history1  = await state.getMyState();
+      console.log("Historial actual:", history1);
+      // 3) Revisar si history1 está vacío (length === 0), no length < 0
+      if (!history1) {
+        // Serializar los datos PESTEL que ya guardaste en variables o en state
+        
         userInput = JSON.stringify({
-          descripcionProyecto: descripcionProyecto,
-          ubicacion: ubicacion,
+          descripcionProyecto,
+          ubicacion,
           modelo: modeloVentas,
-          carcateristicas: caracteristicasProducto,
+          caracteristicas: caracteristicasProducto,  // corregido typo
           alcance: alcanceProyecto,
           alianzas: alianzasClave,
-      });
-    } else {
-      userInput = ctx.body;  // Capturamos el mensaje del usuario
-    }
-      const userId = ctx.from;                  // identificador del usuario (teléfono)
-      
-      // Inicializar el estado para este usuario (historial vacío y fase 1 activa)
-      await state.update({ history1: [], history2: [], phase: 1 });
-      
-      // Preparar mensajes para la solicitud inicial a GPT-4 (modelo1)
-      const messages = [{ role: 'user', content: userInput },
-        {role: "system", content: process.env.PESTEL_AGENT_DESC}
+        });
+      } else {
+        // Si ya había historial, tomamos el mensaje que envía el usuario
+        userInput = ctx.body;
+      }
+
+      // Preparar mensajes para GPT-4
+      const messages = [
+        { role: 'user', content: userInput },
+        { role: 'system', content: process.env.PESTEL_AGENT_DESC }
       ];
 
       let reply;
@@ -55,74 +65,48 @@ const pestelFlow = addKeyword(['PESTEL']).addAnswer( "Procesando información, p
         console.error('Error llamando a GPT-4:', error);
         reply = "Lo siento, hubo un error al consultar el modelo.";
       }
-      
-      // Guardar el intercambio en el historial de la conversación 1
-      await state.update({ 
-        history1: [
-          { role: 'user', content: userInput }, 
-          { role: 'assistant', content: reply }
-        ] 
-      });
-
-      // Enviar la respuesta del modelo 1 al usuario
+     
       await flowDynamic(reply);
-      
-      // **IMPORTANTE**: No terminamos el flujo aquí, queremos seguir en fase 1 hasta que usuario diga "fin".
-      // Por lo tanto, continuamos esperando más mensajes del usuario en este mismo flujo (ver siguiente .addAnswer).
+      // Seguimos en este mismo flujo hasta que el usuario escriba "Fin"
     }
-  ).addAnswer('¿Tienes otra pregunta de tu analisis? Si deseas pasar al segundo modelo, escribe Fin.',
-    {delay: 200},
+  )
+  .addAnswer(
+    'Ingresa el area de interés o pregunta que deseas.',
+    {capture:true},
     async (ctx, { flowDynamic, state, gotoFlow, fallBack }) => {
-      capture = true
-      const userMsg = ctx.body;
-      console.log("hola") 
-      console.log(ctx.body) 
-      console.log(state.getMyState())
-      // Verificar si el usuario quiere terminar la fase 1
-      if (userMsg.toLowerCase() === 'fin') {
-        
-        // Cambiar a fase 2: iniciar flujo del segundo modelo
-        return gotoFlow(ConeFlow);  // saltar al flujo del modelo 2:contentReference[oaicite:7]{index=7}
+      const userMsg = ctx.body.trim().toLowerCase();
+
+      // Cuando el usuario escriba "fin", saltamos al siguiente flujo
+      if (userMsg === 'fin') {
+        return gotoFlow(ConeFlow);
       }
-      // Si no es "fin", entonces es otro mensaje para el modelo 1.
-      // Recuperar historial actual y agregar el nuevo mensaje de usuario
-      const currState = state.getMyState();
-      history1 = currState.history1;
-      if (userMsg.toLowerCase() !== 'fin' || userMsg.toLowerCase !== 'cancelar' || userMsg.toLowerCase !== 'no') {
-        history1.push({ role: 'user', content: userMsg });
-        
-        // Llamar a GPT-4 nuevamente con el historial actualizado
-        let reply;
-        try {
-            reply = await callGPT(history1);
-        } catch (error) {
-            console.error('Error en llamada GPT-4:', error);
-            reply = "Error consultando el modelo en fase 1.";
-        }
-        // Agregar respuesta del asistente al historial
-        history1.push({ role: 'assistant', content: reply });
-        await state.update({ history1 });  // actualizar historial en el estado
-        
-        // Enviar respuesta al usuario
-        await flowDynamic(reply);
-        await state.update({ 
-            history1: [
-              { role: 'user', content: userMsg
 
-               },
-              { role: 'assistant', content: reply }
-            ] 
-          });
-          return fallBack( '¿Tienes otra pregunta o mensaje para Modelo 1? Si deseas pasar al segundo modelo, escribe *Modelo 2*.')
-    } else {
-      return gotoFlow(ConeFlow)
-    }
-      // Volver a esperar la siguiente entrada del usuario en el mismo flujo (recursivamente).
-      // Al no llamar endFlow ni cambiar de flujo aquí, seguimos en flowModelo1, 
-      // por lo que el usuario puede enviar otro mensaje y volverá a ejecutar este mismo callback.
-    }
+      // Si no es "fin", seguimos la conversación
+      // 4) Volver a tomar el historial
+      history1= await state.getMyState();
+      // Agregar la nueva pregunta al historial
+      history1.push({ role: 'user', content: ctx.body });
 
+      let reply;
+      try {
+        reply = await callGPT(history1);
+      } catch (error) {
+        console.error('Error en llamada GPT-4:', error);
+        reply = "Error consultando el modelo en fase 1.";
+      }
+
+      // Agregar la respuesta al historial y guardarlo
+      history1.push({ role: 'assistant', content: reply });
+      await state.update({ history1 });
+
+      // Enviar la respuesta al usuario
+      await flowDynamic(reply);
+
+      // Si deseas usar fallback para mostrar nuevamente la pregunta guía:
+      return fallBack('¿Tienes otra pregunta o mensaje para Modelo 1? Si deseas pasar al segundo modelo, escribe *Fin*.');
+    }
   );
+
 
   const ConeFlow = addKeyword(['CONO']).addAnswer( "Haz tu consulta",
     { delay: 200}, 
@@ -329,7 +313,7 @@ const pestelFlow = addKeyword(['PESTEL']).addAnswer( "Procesando información, p
 
   );
 
-  const backcastingFlow = addKeyword(['PESTEL']).addAnswer( "Haz tu consulta",
+  const backcastingFlow = addKeyword(['BACKCASTING']).addAnswer( "Haz tu consulta",
     { delay: 200}, 
     async (ctx, { flowDynamic, state, fallBack, gotoFlow }) => {
       const userInput = "";
@@ -430,7 +414,7 @@ const pestelFlow = addKeyword(['PESTEL']).addAnswer( "Procesando información, p
   );  
 
 // Flow para capturar los datos del análisis PESTEL
-const dataFlow = addKeyword(['PESTEL', 'análisis PESTEL']).addAnswer(['¡Hola! Para realizar el análisis PESTEL, necesito la siguiente información de tu proyecto:','1. Descripción del proyecto'],{ capture: true},
+const dataFlow = addKeyword(['DATOS', 'FORMULARIO']).addAnswer(['¡Hola! Para realizar el análisis PESTEL, necesito la siguiente información de tu proyecto:','1. Descripción del proyecto'],{ capture: true},
     async (ctx, { flowDynamic, endFlow }) => {
       if (ctx.body === '❌ Cancelar') {
         return endFlow({
@@ -503,48 +487,23 @@ const dataFlow = addKeyword(['PESTEL', 'análisis PESTEL']).addAnswer(['¡Hola! 
             });
           }
       alianzasClave = ctx.body;
-      return await flowDynamic(`Alcalianzas recibidas ✅`);
+      return await flowDynamic(`Alianzas recibidas ✅`);
       }
     )
-.addAnswer("datos recibidos",null, 
-  async (ctx, {flowDynamic, state})=> {
-      // Guardar todos los datos en el estado para usarlo en otro flow
-       
-       await state.update({
-        pestelData: {
-          descripcionProyecto,
-          ubicacion,
-          modeloVentas,
-          caracteristicasProducto,
-          alcanceProyecto,
-          alianzasClave,
-        }
-      })
-      
-
-      // Confirmación al usuario
-      
-      return await flowDynamic(["¡Perfecto! He registrado toda la información:"]);
+.addAnswer("datos recibidos",
+  {}, 
+  async (ctx, {flowDynamic, gotoFlow,state})=> {
+      // Guardar todos los datos en el estado para usarlo en otro flo
+       await flowDynamic([`¡Perfecto! He registrado toda la información: `,`Enviando datos`, `ESCRIBA pestel PARA CONTINUAR`]);
         // Esperar 1 segundo antes de enviar la confirmación
+       return gotoFlow(pestelFlow)
   }
-) // Redirigir al flujo del modelo 1 después de capturar los datos
-.addAnswer("los datos correctos?", {capture: true},
-   async (ctx, { flowDynamic, gotoFlow, state }) => {
-    // si no son correctos cancela el flujo
-    
-    if (ctx.body.toLowerCase() === 'no' || ctx.body.toLowerCase() === 'cancelar') {
-      console.log("ctx.body", ctx.body)
-      return gotoFlow(menuFlow); // Volver al flujo de captura de datos
-    }
-    else 
-      console.log("ctx.body", ctx.body)
-      return(gotoFlow(pestelFlow))
-  });
+) 
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY  });
 // Función auxiliar para llamar al modelo GPT-4 con un array de mensajes (historial + nuevo mensaje)
 async function callGPT(messages) {
-  //console.log("Llamando a GPT-4 con mensajes:", messages);
+  console.log("Llamando a GPT-4 con mensajes:", messages);
   const response = await openai.chat.completions.create({
     model: "gpt-4",       // Usamos GPT-4 como solicitado
     messages: messages    // Array de {role, content} incluyendo historial y pregunta actual
@@ -562,18 +521,11 @@ const pathConsultas = path.join(__dirname, "mensajes", "promptConsultas.txt")
 const promptConsultas = fs.readFileSync(pathConsultas, "utf8")
 
 
-const flowConsultas = addKeyword(EVENTS.ACTION).addAnswer('Este es el flow consultas').addAnswer("Hace tu consulta", {delay: 4000}, async (ctx, ctxFn) => {
-        const prompt = promptConsultas
-        const consulta = ctx.body
-        const answer = await chat(prompt, consulta)
-        console.log(answer)
-        await ctxFn.flowDynamic(answer.content)
-    })
 
 
-const menuFlow = addKeyword(EVENTS.WELCOME).addAnswer(
+const menuFlow = addKeyword(["hola"]).addAnswer(
     menu,
-    { capture: true },
+    {capture: true},
     async (ctx, { gotoFlow, fallBack, flowDynamic }) => {
         if (!["1", "2", "3", "4", "0"].includes(ctx.body)) {
             return fallBack(
@@ -602,7 +554,7 @@ const main = async () => {
         dbUri: process.env.MONGO_DB_URI,
         dbName: "YoutubeTest"
     })
-    const adapterFlow = createFlow([ menuFlow, , ConeFlow, dataFlow, pestelFlow, ruedaFlow, backcastingFlow, flowConsultas])
+    const adapterFlow = createFlow([ menuFlow, , ConeFlow, dataFlow, pestelFlow, ruedaFlow, backcastingFlow])
     const adapterProvider = createProvider(BaileysProvider)
 
     createBot({
