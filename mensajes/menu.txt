@@ -1,0 +1,5 @@
+Estas son las opciones disponibles selecciona que quieres realizar el dia de hoy
+1.- PESTEL
+2.- CONO
+3.- RUEDA
+4.- Backcasting
