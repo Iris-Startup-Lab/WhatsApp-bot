@@ -23,8 +23,8 @@ let alianzasClave;
 let history1 = []; // Historial de mensajes para el primer modelo
 const pestelFlow = addKeyword(['PESTEL'])
   .addAnswer(
-    "Procesando información, por favor espera…",
-    {},
+    ["Procesando información, por favor espera…"],
+    {delay: 1000},
     async (ctx, { flowDynamic, state, gotoFlow }) => {
       // 1) userInput debe ser mutable, no const
       console.log("Iniciando flujo PESTEL con datos:")
@@ -69,7 +69,7 @@ const pestelFlow = addKeyword(['PESTEL'])
       await flowDynamic(reply);
       // Seguimos en este mismo flujo hasta que el usuario escriba "Fin"
     }
-  )
+   )
   .addAnswer(
     'Ingresa el area de interés o pregunta que deseas.',
     {capture:true},
@@ -490,12 +490,11 @@ const dataFlow = addKeyword(['DATOS', 'FORMULARIO']).addAnswer(['¡Hola! Para re
       return await flowDynamic(`Alianzas recibidas ✅`);
       }
     )
-.addAnswer("datos recibidos",
-  {}, 
-  async (ctx, {flowDynamic, gotoFlow,state})=> {
+    .addAction(async (_,{flowDynamic, gotoFlow, state})=> {
       // Guardar todos los datos en el estado para usarlo en otro flo
        await flowDynamic([`¡Perfecto! He registrado toda la información: `,`Enviando datos`, `ESCRIBA pestel PARA CONTINUAR`]);
         // Esperar 1 segundo antes de enviar la confirmación
+      
        return gotoFlow(pestelFlow)
   }
 ) 
